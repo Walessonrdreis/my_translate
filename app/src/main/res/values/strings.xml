@@ -3,4 +3,5 @@
     <string name="grant_overlay_permission">Conceder permissão de sobreposição</string>
     <string name="start_bubble">Iniciar bolha flutuante</string>
     <string name="permission_required">Permissão de sobreposição necessária</string>
+    <string name="permission_granted_ready">Permissão concedida. Pronto para iniciar.</string>
 </resources>

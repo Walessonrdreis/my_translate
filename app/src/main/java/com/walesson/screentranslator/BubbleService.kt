@@ -6,22 +6,28 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import androidx.core.app.NotificationCompat
+import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.walesson.screentranslator.capture.ScreenCaptureManager
 import com.walesson.screentranslator.ocr.TextRecognitionManager
 import com.walesson.screentranslator.overlay.TranslationOverlayView
 import com.walesson.screentranslator.translate.TranslationManager
 import com.walesson.screentranslator.translate.TranslatorFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -49,14 +55,25 @@ class BubbleService : Service() {
     private var captureManager: ScreenCaptureManager? = null
     private lateinit var ocrManager: TextRecognitionManager
     private lateinit var translationManager: TranslationManager
+    private var recognizerClient: TextRecognizer? = null
+    private var translatorClient: Translator? = null
     private var overlayView: TranslationOverlayView? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        if (!Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Overlay permission not granted; stopping service.")
+            stopSelf()
+            return
+        }
         addBubble()
-        ocrManager = TextRecognitionManager(TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS))
-        translationManager = TranslationManager(TranslatorFactory.createEnglishToPortuguese())
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        recognizerClient = recognizer
+        ocrManager = TextRecognitionManager(recognizer)
+        val translator = TranslatorFactory.createEnglishToPortuguese()
+        translatorClient = translator
+        translationManager = TranslationManager(translator)
         onBubbleTapped = { onBubbleTap() }
     }
 
@@ -68,16 +85,34 @@ class BubbleService : Service() {
             if (resultData != null) {
                 val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val projection = projectionManager.getMediaProjection(resultCode, resultData)
-                val metrics = resources.displayMetrics
+                // API 34+ requires a registered callback before createVirtualDisplay().
+                projection.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        Log.w(TAG, "MediaProjection stopped; tearing down capture.")
+                        captureManager?.stop()
+                        captureManager = null
+                    }
+                }, null)
+                val (width, height) = displaySize()
+                val dpi = resources.displayMetrics.densityDpi
                 captureManager?.stop()
-                captureManager = ScreenCaptureManager(projection) { w, h, dpi ->
+                captureManager = ScreenCaptureManager(projection) { w, h, _ ->
                     android.media.ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
                 }.also {
-                    it.start(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
+                    it.start(width, height, dpi)
                 }
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    private fun displaySize(): Pair<Int, Int> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            return bounds.width() to bounds.height()
+        }
+        val metrics = resources.displayMetrics
+        return metrics.widthPixels to metrics.heightPixels
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -152,16 +187,30 @@ class BubbleService : Service() {
         scope.launch {
             try {
                 val bitmap = withContext(Dispatchers.Default) { capture.captureFrame() }
-                if (bitmap == null) { setLoading(false); return@launch }
-                val blocks = ocrManager.recognize(bitmap)
-                if (blocks.isEmpty()) { setLoading(false); return@launch }
-                translationManager.ensureModelDownloaded().onFailure {
+                if (bitmap == null) {
+                    Log.w(TAG, "No frame captured; aborting translation.")
+                    setLoading(false); return@launch
+                }
+                val blocks = try {
+                    ocrManager.recognize(bitmap)
+                } finally {
+                    bitmap.recycle()
+                }
+                if (blocks.isEmpty()) {
+                    Log.w(TAG, "OCR returned zero text blocks.")
+                    setLoading(false); return@launch
+                }
+                val downloadResult = translationManager.ensureModelDownloaded()
+                if (downloadResult.isFailure) {
+                    Log.e(TAG, "Translation model download failed.", downloadResult.exceptionOrNull())
                     setLoading(false); return@launch
                 }
                 val translated = translationManager.translateAll(blocks)
                 showOverlay(translated)
                 setLoading(false)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.e(TAG, "Translation pipeline failed.", e)
                 setLoading(false)
             }
         }
@@ -177,7 +226,9 @@ class BubbleService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
         windowManager.addView(view, params)
@@ -206,12 +257,19 @@ class BubbleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         removeOverlay()
-        captureManager?.stop()
         scope.cancel()
+        captureManager?.stop()
+        captureManager = null
+        recognizerClient?.close()
+        recognizerClient = null
+        translatorClient?.close()
+        translatorClient = null
         bubbleView?.let { windowManager.removeView(it) }
+        bubbleView = null
     }
 
     companion object {
+        private const val TAG = "ScreenTranslator"
         const val ACTION_START_WITH_PROJECTION = "action_start_with_projection"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"

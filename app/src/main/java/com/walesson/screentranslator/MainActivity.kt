@@ -1,7 +1,9 @@
 package com.walesson.screentranslator
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -33,6 +35,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * The notification permission is best-effort: whatever the user answers, we continue with
+     * the capture flow (a missing notification only degrades the visible service indicator).
+     */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        launchCaptureFlow()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -45,11 +57,26 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.startBubbleButton).setOnClickListener {
             if (hasOverlayPermission()) {
-                captureLauncher.launch(projectionManager.createScreenCaptureIntent())
+                startWithNotificationPermission()
             } else {
                 requestOverlayPermission()
             }
         }
+    }
+
+    private fun startWithNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        launchCaptureFlow()
+    }
+
+    private fun launchCaptureFlow() {
+        captureLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
     override fun onResume() {
@@ -59,7 +86,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateStatus() {
         statusText.text = if (hasOverlayPermission()) {
-            "Permissão concedida. Pronto para iniciar."
+            getString(R.string.permission_granted_ready)
         } else {
             getString(R.string.permission_required)
         }
