@@ -101,4 +101,10 @@ class BubbleService : Service() {
         super.onDestroy()
         bubbleView?.let { windowManager.removeView(it) }
     }
+
+    companion object {
+        const val ACTION_START_WITH_PROJECTION = "action_start_with_projection"
+        const val EXTRA_RESULT_CODE = "extra_result_code"
+        const val EXTRA_RESULT_DATA = "extra_result_data"
+    }
 }

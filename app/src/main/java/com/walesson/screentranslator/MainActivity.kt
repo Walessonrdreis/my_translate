@@ -1,10 +1,13 @@
 package com.walesson.screentranslator
 
+import android.app.Activity
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import android.widget.Button
 import android.widget.TextView
@@ -12,6 +15,23 @@ import android.widget.TextView
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusText: TextView
+
+    private val projectionManager by lazy {
+        getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    }
+
+    private val captureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val intent = Intent(this, BubbleService::class.java).apply {
+                action = BubbleService.ACTION_START_WITH_PROJECTION
+                putExtra(BubbleService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(BubbleService.EXTRA_RESULT_DATA, result.data)
+            }
+            startForegroundService(intent)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,7 +45,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.startBubbleButton).setOnClickListener {
             if (hasOverlayPermission()) {
-                startService(Intent(this, BubbleService::class.java))
+                captureLauncher.launch(projectionManager.createScreenCaptureIntent())
             } else {
                 requestOverlayPermission()
             }
