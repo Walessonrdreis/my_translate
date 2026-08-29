@@ -24,7 +24,9 @@ import com.walesson.screentranslator.translate.TranslationManager
 import com.walesson.screentranslator.translate.TranslatorFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val CHANNEL_ID = "screen_translator_channel"
 private const val NOTIFICATION_ID = 1
@@ -67,6 +69,7 @@ class BubbleService : Service() {
                 val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val projection = projectionManager.getMediaProjection(resultCode, resultData)
                 val metrics = resources.displayMetrics
+                captureManager?.stop()
                 captureManager = ScreenCaptureManager(projection) { w, h, dpi ->
                     android.media.ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
                 }.also {
@@ -147,16 +150,20 @@ class BubbleService : Service() {
         val capture = captureManager ?: return
         setLoading(true)
         scope.launch {
-            val bitmap = capture.captureFrame()
-            if (bitmap == null) { setLoading(false); return@launch }
-            val blocks = ocrManager.recognize(bitmap)
-            if (blocks.isEmpty()) { setLoading(false); return@launch }
-            translationManager.ensureModelDownloaded().onFailure {
-                setLoading(false); return@launch
+            try {
+                val bitmap = withContext(Dispatchers.Default) { capture.captureFrame() }
+                if (bitmap == null) { setLoading(false); return@launch }
+                val blocks = ocrManager.recognize(bitmap)
+                if (blocks.isEmpty()) { setLoading(false); return@launch }
+                translationManager.ensureModelDownloaded().onFailure {
+                    setLoading(false); return@launch
+                }
+                val translated = translationManager.translateAll(blocks)
+                showOverlay(translated)
+                setLoading(false)
+            } catch (e: Exception) {
+                setLoading(false)
             }
-            val translated = translationManager.translateAll(blocks)
-            showOverlay(translated)
-            setLoading(false)
         }
     }
 
@@ -200,6 +207,7 @@ class BubbleService : Service() {
         super.onDestroy()
         removeOverlay()
         captureManager?.stop()
+        scope.cancel()
         bubbleView?.let { windowManager.removeView(it) }
     }
 
