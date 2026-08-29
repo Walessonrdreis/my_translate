@@ -8,20 +8,21 @@ import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognizer
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
-import org.mockito.kotlin.whenever
 
 class TextRecognitionManagerTest {
 
     @Test
     fun `recognize maps ML Kit blocks to TextBlock with text and bounding box`() = runTest {
         val bitmap = mock<Bitmap>()
+        val box = Rect(10, 20, 100, 60)
         val mlKitBlock = mock<Text.TextBlock> {
             on { text } doReturn "Hello world"
-            on { boundingBox } doReturn Rect(10, 20, 100, 60)
+            on { boundingBox } doReturn box
         }
         val text = mock<Text> {
             on { textBlocks } doReturn listOf(mlKitBlock)
@@ -36,7 +37,8 @@ class TextRecognitionManagerTest {
 
         assertEquals(1, result.size)
         assertEquals("Hello world", result[0].text)
-        assertEquals(Rect(10, 20, 100, 60), result[0].boundingBox)
+        // Identity, not equals(): Rect.equals() is a stubbed no-op under the unit-test android.jar.
+        assertSame(box, result[0].boundingBox)
     }
 
     @Test

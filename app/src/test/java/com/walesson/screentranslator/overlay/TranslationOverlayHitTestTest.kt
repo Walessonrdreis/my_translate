@@ -8,9 +8,21 @@ import org.junit.Test
 
 class TranslationOverlayHitTestTest {
 
+    /**
+     * Builds a Rect by assigning its public fields rather than via the 4-arg constructor:
+     * under the unit-test android.jar (returnDefaultValues) constructor bodies are stubbed out,
+     * so only direct field writes reliably carry values. Field reads are unaffected.
+     */
+    private fun rect(left: Int, top: Int, right: Int, bottom: Int) = Rect().also {
+        it.left = left
+        it.top = top
+        it.right = right
+        it.bottom = bottom
+    }
+
     private val blocks = listOf(
-        TextBlock("Olá", Rect(0, 0, 100, 50)),
-        TextBlock("Mundo", Rect(200, 200, 300, 250))
+        TextBlock("Olá", rect(0, 0, 100, 50)),
+        TextBlock("Mundo", rect(200, 200, 300, 250))
     )
 
     @Test

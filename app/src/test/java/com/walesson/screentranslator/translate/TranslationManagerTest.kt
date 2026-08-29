@@ -6,10 +6,10 @@ import com.walesson.screentranslator.ocr.TextBlock
 import android.graphics.Rect
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
-import org.mockito.kotlin.whenever
 
 class TranslationManagerTest {
 
@@ -20,15 +20,19 @@ class TranslationManagerTest {
             on { translate("World") } doReturn Tasks.forResult("Mundo")
         }
         val manager = TranslationManager(translator)
+        val firstBox = Rect(0, 0, 10, 10)
+        val secondBox = Rect(20, 20, 30, 30)
         val blocks = listOf(
-            TextBlock("Hello", Rect(0, 0, 10, 10)),
-            TextBlock("World", Rect(20, 20, 30, 30))
+            TextBlock("Hello", firstBox),
+            TextBlock("World", secondBox)
         )
 
         val result = manager.translateAll(blocks)
 
         assertEquals(listOf("Olá", "Mundo"), result.map { it.text })
-        assertEquals(listOf(Rect(0, 0, 10, 10), Rect(20, 20, 30, 30)), result.map { it.boundingBox })
+        // Identity, not equals(): Rect.equals() is a stubbed no-op under the unit-test android.jar.
+        assertSame(firstBox, result[0].boundingBox)
+        assertSame(secondBox, result[1].boundingBox)
     }
 
     @Test

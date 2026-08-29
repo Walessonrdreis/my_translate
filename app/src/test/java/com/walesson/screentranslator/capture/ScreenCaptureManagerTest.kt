@@ -4,11 +4,14 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Test
+import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.mockito.ArgumentMatchers.anyInt
+import org.mockito.ArgumentMatchers.anyString
 
 class ScreenCaptureManagerTest {
 
@@ -30,11 +33,14 @@ class ScreenCaptureManagerTest {
 
         manager.start(width = 1080, height = 2400, dpi = 420)
 
+        // Read the surface before entering verification mode: interacting with another mock
+        // while a verify() is pending confuses Mockito's ongoing-verification state.
+        val surface = imageReader.surface
         verify(projection).createVirtualDisplay(
             "ScreenTranslatorCapture",
             1080, 2400, 420,
             android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader.surface,
+            surface,
             null, null
         )
     }
@@ -46,7 +52,7 @@ class ScreenCaptureManagerTest {
         val virtualDisplay = mock<VirtualDisplay>()
         whenever(
             projection.createVirtualDisplay(
-                anyString(), anyInt(), anyInt(), anyInt(), anyInt(), any(), anyOrNull(), anyOrNull()
+                anyString(), anyInt(), anyInt(), anyInt(), anyInt(), anyOrNull(), anyOrNull(), anyOrNull()
             )
         ) doReturn virtualDisplay
         val manager = ScreenCaptureManager(projection) { _, _, _ -> imageReader }
