@@ -28,7 +28,14 @@ class ScreenCaptureManager(
 
     fun captureFrame(): Bitmap? {
         val reader = imageReader ?: return null
-        val image = reader.acquireLatestImage() ?: return null
+        var image = reader.acquireLatestImage() ?: return null
+        // Drain any additional queued/stale frames so we return the truly latest one.
+        var next = reader.acquireLatestImage()
+        while (next != null) {
+            image.close()
+            image = next
+            next = reader.acquireLatestImage()
+        }
         return image.use { toBitmap(it) }
     }
 
@@ -45,12 +52,19 @@ class ScreenCaptureManager(
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
         val rowPadding = rowStride - pixelStride * image.width
-        val bitmap = Bitmap.createBitmap(
+        if (rowPadding == 0) {
+            val bitmap = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
+            bitmap.copyPixelsFromBuffer(buffer)
+            return bitmap
+        }
+        val paddedBitmap = Bitmap.createBitmap(
             image.width + rowPadding / pixelStride,
             image.height,
             Bitmap.Config.ARGB_8888
         )
-        bitmap.copyPixelsFromBuffer(buffer)
-        return Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
+        paddedBitmap.copyPixelsFromBuffer(buffer)
+        val cropped = Bitmap.createBitmap(paddedBitmap, 0, 0, image.width, image.height)
+        paddedBitmap.recycle()
+        return cropped
     }
 }
