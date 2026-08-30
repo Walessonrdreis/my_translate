@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -29,7 +30,9 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.walesson.screentranslator.capture.ScreenCaptureManager
+import com.walesson.screentranslator.ocr.OCR_UPSCALE_FACTOR
 import com.walesson.screentranslator.ocr.TextRecognitionManager
+import com.walesson.screentranslator.ocr.enhanceForOcr
 import com.walesson.screentranslator.overlay.TranslationOverlayView
 import com.walesson.screentranslator.translate.TranslationManager
 import com.walesson.screentranslator.translate.TranslatorFactory
@@ -523,7 +526,25 @@ class BubbleService : Service() {
                     return@launch
                 }
                 val blocks = try {
-                    ocrManager.recognize(bitmap)
+                    val enhanced = withContext(Dispatchers.Default) { enhanceForOcr(bitmap) }
+                    val rawBlocks = try {
+                        ocrManager.recognize(enhanced)
+                    } finally {
+                        enhanced.recycle()
+                    }
+                    // OCR ran on the upscaled bitmap; map boxes back to real screen pixels
+                    // so the overlay lines up with the original text.
+                    rawBlocks.map { block ->
+                        val box = block.boundingBox
+                        block.copy(
+                            boundingBox = Rect(
+                                (box.left / OCR_UPSCALE_FACTOR).toInt(),
+                                (box.top / OCR_UPSCALE_FACTOR).toInt(),
+                                (box.right / OCR_UPSCALE_FACTOR).toInt(),
+                                (box.bottom / OCR_UPSCALE_FACTOR).toInt()
+                            )
+                        )
+                    }
                 } finally {
                     bitmap.recycle()
                 }
