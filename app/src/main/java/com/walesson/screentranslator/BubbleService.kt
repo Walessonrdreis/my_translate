@@ -385,16 +385,25 @@ class BubbleService : Service() {
         val topY = (params.y - buttonSizePx - gapPx).coerceAtLeast(0)
         val bottomY = params.y + bubbleSizePx + gapPx
 
-        topMenuButton = addMenuButton(R.drawable.ic_autorenew, buttonSizePx, buttonX, topY) { toggleMode() }
-        bottomMenuButton = addMenuButton(R.drawable.ic_settings, buttonSizePx, buttonX, bottomY) { openSettings() }
+        val modeIsOn = TranslationMode.load(this) == TranslationMode.CONTINUOUS
+        val modeBackgroundRes = if (modeIsOn) R.drawable.ic_mode_on else R.drawable.ic_mode_off
+        topMenuButton = addMenuButton(R.drawable.ic_autorenew, modeBackgroundRes, buttonSizePx, buttonX, topY) { toggleMode() }
+        bottomMenuButton = addMenuButton(R.drawable.ic_settings, R.drawable.ic_close_target, buttonSizePx, buttonX, bottomY) { openSettings() }
     }
 
-    private fun addMenuButton(iconRes: Int, sizePx: Int, x: Int, y: Int, onClick: () -> Unit): View {
+    private fun addMenuButton(
+        iconRes: Int,
+        backgroundRes: Int,
+        sizePx: Int,
+        x: Int,
+        y: Int,
+        onClick: () -> Unit
+    ): View {
         val density = resources.displayMetrics.density
         val iconPx = (MENU_BUTTON_ICON_DP * density).toInt()
 
         val button = FrameLayout(this).apply {
-            background = androidx.core.content.ContextCompat.getDrawable(this@BubbleService, R.drawable.ic_close_target)
+            background = androidx.core.content.ContextCompat.getDrawable(this@BubbleService, backgroundRes)
             setOnClickListener { onClick() }
         }
         val icon = ImageView(this).apply {
@@ -426,39 +435,45 @@ class BubbleService : Service() {
         bottomMenuButton = null
     }
 
+    /**
+     * Turning continuous mode on the first time (before the accessibility service is enabled)
+     * only opens the system permission screen — it does not flip the mode yet, since without
+     * the service "scroll stopped" can never fire. Once the service is enabled, the next tap
+     * actually switches the mode on.
+     */
     private fun toggleMode() {
-        val newMode = if (TranslationMode.load(this) == TranslationMode.CONTINUOUS) {
-            TranslationMode.MANUAL
+        val current = TranslationMode.load(this)
+        if (current == TranslationMode.MANUAL) {
+            if (!isAccessibilityServiceEnabled()) {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+                hideRadialMenu()
+                return
+            }
+            TranslationMode.save(this, TranslationMode.CONTINUOUS)
+            applyContinuousModeState(TranslationMode.CONTINUOUS)
         } else {
-            TranslationMode.CONTINUOUS
+            TranslationMode.save(this, TranslationMode.MANUAL)
+            applyContinuousModeState(TranslationMode.MANUAL)
         }
-        TranslationMode.save(this, newMode)
-        applyContinuousModeState(newMode)
         hideRadialMenu()
     }
 
+    /** For now, opens the app's home screen — it will become the dedicated settings screen. */
     private fun openSettings() {
-        startActivity(Intent(this, SettingsActivity::class.java).apply {
+        startActivity(Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         })
         hideRadialMenu()
     }
 
-    /**
-     * Wires (or tears down) the scroll-stop → auto-translate callback for continuous mode.
-     * Prompts the user to enable the accessibility service if it isn't already, since without
-     * it "scroll stopped" can never be detected.
-     */
+    /** Wires (or tears down) the scroll-stop → auto-translate callback for continuous mode. */
     private fun applyContinuousModeState(mode: TranslationMode) {
-        if (mode == TranslationMode.CONTINUOUS) {
-            if (!isAccessibilityServiceEnabled()) {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                })
-            }
-            ScrollDetectorService.onScrollSettled = { onBubbleTap() }
+        ScrollDetectorService.onScrollSettled = if (mode == TranslationMode.CONTINUOUS) {
+            { onBubbleTap() }
         } else {
-            ScrollDetectorService.onScrollSettled = null
+            null
         }
     }
 

@@ -20,6 +20,10 @@ class ScrollDetectorService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (onScrollSettled == null) return
+        // Our own bubble/overlay windows also emit window-content-changed events when shown
+        // or hidden; without this filter, translating would immediately reset our own "did
+        // it settle" timer, and continuous mode would never stop re-triggering itself.
+        if (event?.packageName == packageName) return
         handler.removeCallbacks(settleRunnable)
         handler.postDelayed(settleRunnable, SETTLE_DELAY_MS)
     }

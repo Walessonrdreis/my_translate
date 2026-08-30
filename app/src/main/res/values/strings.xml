@@ -5,7 +5,4 @@
     <string name="permission_required">Permissão de sobreposição necessária</string>
     <string name="permission_granted_ready">Permissão concedida. Pronto para iniciar.</string>
     <string name="scroll_detector_description">Usado apenas para detectar quando a rolagem da tela para, e assim traduzir automaticamente no modo contínuo. Não lê nem armazena o conteúdo da tela.</string>
-    <string name="open_accessibility_settings">Ativar detecção de rolagem (modo contínuo)</string>
-    <string name="mode_manual">Modo atual: Manual (toque para traduzir)</string>
-    <string name="mode_continuous">Modo atual: Contínuo (traduz ao parar de rolar)</string>
 </resources>
