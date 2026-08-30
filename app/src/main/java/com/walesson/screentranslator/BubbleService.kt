@@ -5,12 +5,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -50,6 +53,10 @@ private const val CLOSE_TARGET_MARGIN_BOTTOM_DP = 48
 /** How close the bubble's center must get to the close target's center to arm it, in dp. */
 private const val CLOSE_TARGET_SNAP_RADIUS_DP = 60f
 private const val CLOSE_TARGET_ARMED_SCALE = 1.2f
+private const val LONG_PRESS_MS = 500L
+private const val MENU_BUTTON_SIZE_DP = 48
+private const val MENU_BUTTON_ICON_DP = 24
+private const val MENU_GAP_DP = 16
 
 class BubbleService : Service() {
 
@@ -69,6 +76,13 @@ class BubbleService : Service() {
 
     private var closeTargetView: View? = null
     private var closeTargetArmed = false
+
+    private val longPressHandler = Handler(Looper.getMainLooper())
+    private var longPressRunnable: Runnable? = null
+    private var longPressTriggered = false
+    private var topMenuButton: View? = null
+    private var bottomMenuButton: View? = null
+    private var isMenuShowing = false
 
     private val scope = CoroutineScope(Dispatchers.Main)
     private var captureManager: ScreenCaptureManager? = null
@@ -95,6 +109,7 @@ class BubbleService : Service() {
         translatorClient = translator
         translationManager = TranslationManager(translator)
         onBubbleTapped = { onBubbleTap() }
+        applyContinuousModeState(TranslationMode.load(this))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -224,13 +239,24 @@ class BubbleService : Service() {
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
                 isDragging = false
+                longPressTriggered = false
+                val runnable = Runnable {
+                    longPressTriggered = true
+                    if (isMenuShowing) hideRadialMenu() else showRadialMenu()
+                }
+                longPressRunnable = runnable
+                longPressHandler.postDelayed(runnable, LONG_PRESS_MS)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = (event.rawX - initialTouchX).toInt()
                 val dy = (event.rawY - initialTouchY).toInt()
                 if (kotlin.math.abs(dx) > 10 || kotlin.math.abs(dy) > 10) {
-                    if (!isDragging) showCloseTarget()
+                    if (!isDragging) {
+                        cancelLongPress()
+                        if (isMenuShowing) hideRadialMenu()
+                        showCloseTarget()
+                    }
                     isDragging = true
                 }
                 params.x = initialX + dx
@@ -240,12 +266,17 @@ class BubbleService : Service() {
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                cancelLongPress()
+                if (longPressTriggered) {
+                    return true
+                }
                 if (isDragging) {
                     hideCloseTarget()
                     if (closeTargetArmed) {
                         closeBubbleAndOpenApp()
-                        return true
                     }
+                } else if (isMenuShowing) {
+                    hideRadialMenu()
                 } else {
                     onBubbleTapped?.invoke()
                 }
@@ -253,6 +284,11 @@ class BubbleService : Service() {
             }
         }
         return false
+    }
+
+    private fun cancelLongPress() {
+        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
+        longPressRunnable = null
     }
 
     private fun addCloseTarget() {
@@ -330,6 +366,103 @@ class BubbleService : Service() {
         }
         startActivity(openAppIntent)
         stopSelf()
+    }
+
+    /** Shows the two-button radial menu (top: toggle mode, bottom: settings) above/below the bubble. */
+    private fun showRadialMenu() {
+        val params = layoutParams ?: return
+        isMenuShowing = true
+        val density = resources.displayMetrics.density
+        val bubbleSizePx = (BUBBLE_SIZE_DP * density).toInt()
+        val buttonSizePx = (MENU_BUTTON_SIZE_DP * density).toInt()
+        val gapPx = (MENU_GAP_DP * density).toInt()
+
+        val buttonX = params.x + bubbleSizePx / 2 - buttonSizePx / 2
+        val topY = (params.y - buttonSizePx - gapPx).coerceAtLeast(0)
+        val bottomY = params.y + bubbleSizePx + gapPx
+
+        topMenuButton = addMenuButton(R.drawable.ic_autorenew, buttonSizePx, buttonX, topY) { toggleMode() }
+        bottomMenuButton = addMenuButton(R.drawable.ic_settings, buttonSizePx, buttonX, bottomY) { openSettings() }
+    }
+
+    private fun addMenuButton(iconRes: Int, sizePx: Int, x: Int, y: Int, onClick: () -> Unit): View {
+        val density = resources.displayMetrics.density
+        val iconPx = (MENU_BUTTON_ICON_DP * density).toInt()
+
+        val button = FrameLayout(this).apply {
+            background = androidx.core.content.ContextCompat.getDrawable(this@BubbleService, R.drawable.ic_close_target)
+            setOnClickListener { onClick() }
+        }
+        val icon = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER)
+            setImageResource(iconRes)
+        }
+        button.addView(icon)
+
+        val params = WindowManager.LayoutParams(
+            sizePx,
+            sizePx,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            this.x = x
+            this.y = y
+        }
+        windowManager.addView(button, params)
+        return button
+    }
+
+    private fun hideRadialMenu() {
+        isMenuShowing = false
+        topMenuButton?.let { windowManager.removeView(it) }
+        topMenuButton = null
+        bottomMenuButton?.let { windowManager.removeView(it) }
+        bottomMenuButton = null
+    }
+
+    private fun toggleMode() {
+        val newMode = if (TranslationMode.load(this) == TranslationMode.CONTINUOUS) {
+            TranslationMode.MANUAL
+        } else {
+            TranslationMode.CONTINUOUS
+        }
+        TranslationMode.save(this, newMode)
+        applyContinuousModeState(newMode)
+        hideRadialMenu()
+    }
+
+    private fun openSettings() {
+        startActivity(Intent(this, SettingsActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        })
+        hideRadialMenu()
+    }
+
+    /**
+     * Wires (or tears down) the scroll-stop → auto-translate callback for continuous mode.
+     * Prompts the user to enable the accessibility service if it isn't already, since without
+     * it "scroll stopped" can never be detected.
+     */
+    private fun applyContinuousModeState(mode: TranslationMode) {
+        if (mode == TranslationMode.CONTINUOUS) {
+            if (!isAccessibilityServiceEnabled()) {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            }
+            ScrollDetectorService.onScrollSettled = { onBubbleTap() }
+        } else {
+            ScrollDetectorService.onScrollSettled = null
+        }
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expected = ComponentName(this, ScrollDetectorService::class.java).flattenToString()
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            ?: return false
+        return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
     }
 
     fun setLoading(isLoading: Boolean) {
@@ -412,6 +545,9 @@ class BubbleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         removeOverlay()
+        cancelLongPress()
+        hideRadialMenu()
+        ScrollDetectorService.onScrollSettled = null
         orbitAnimator?.cancel()
         scope.cancel()
         captureManager?.stop()
