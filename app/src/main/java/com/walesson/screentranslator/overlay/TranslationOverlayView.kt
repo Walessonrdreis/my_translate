@@ -12,17 +12,14 @@ import android.view.MotionEvent
 import android.view.View
 import com.walesson.screentranslator.ocr.TextBlock
 
-private const val MIN_TEXT_SIZE = 8f
+private const val MIN_TEXT_SIZE = 6f
+private const val START_TEXT_SIZE = 48f
 private const val TEXT_SIZE_STEP = 1f
-private const val BOX_PADDING = 4f
+private const val BOX_PADDING = 3f
 /** Gap kept between a block's film and the next line below it. */
 private const val LINE_GAP = 2f
-/**
- * The OCR bounding box includes line-spacing above/below the glyphs, so matching its full
- * height overshoots the real letter size. This ratio brings the translated font a bit under
- * the original's apparent size, which is what keeps it from crowding neighboring lines.
- */
-private const val FONT_HEIGHT_RATIO = 0.6f
+/** Small margin so text doesn't touch the film's edges once it fits. */
+private const val FIT_SCALE = 0.92f
 
 fun isOutsideAllBlocks(x: Float, y: Float, blocks: List<TextBlock>): Boolean {
     // Manual containment check: does not rely on Rect.contains(), which is a stubbed
@@ -62,27 +59,26 @@ class TranslationOverlayView(context: Context) : View(context) {
         val sorted = blocks.sortedBy { it.boundingBox.top }
         for ((index, block) in sorted.withIndex()) {
             val box = block.boundingBox
+            val originalWidth = (box.right - box.left).toFloat()
             val originalHeight = (box.bottom - box.top).toFloat()
-            val preferredSize = (originalHeight * FONT_HEIGHT_RATIO).coerceAtLeast(MIN_TEXT_SIZE)
 
             val nextTop = sorted.getOrNull(index + 1)?.boundingBox?.top?.toFloat()
-            val maxHeight = if (nextTop != null && nextTop > box.top) {
+            val ceilingHeight = if (nextTop != null && nextTop > box.top) {
                 maxOf(originalHeight, nextTop - box.top - LINE_GAP)
             } else {
                 Float.MAX_VALUE
             }
 
-            // Width stays at the original box width unless a single word is wider than that
-            // — then it widens just enough to fit that word, never enough to cut it mid-way.
-            val originalWidth = (box.right - box.left).toFloat()
-            textPaint.textSize = preferredSize
-            val longestWordWidth = block.text.split(" ").maxOfOrNull { textPaint.measureText(it) } ?: 0f
-            val filmWidth = maxOf(originalWidth, longestWordWidth + 2 * BOX_PADDING)
-            val wrapWidth = (filmWidth - 2 * BOX_PADDING).toInt().coerceAtLeast(1)
+            val fit = fitTextToBox(
+                text = block.text,
+                targetWidth = originalWidth - 2 * BOX_PADDING,
+                targetHeight = originalHeight - 2 * BOX_PADDING,
+                ceilingHeight = if (ceilingHeight == Float.MAX_VALUE) ceilingHeight else ceilingHeight - 2 * BOX_PADDING
+            )
 
-            val layout = buildMatchedLayout(block.text, wrapWidth, preferredSize, maxHeight - 2 * BOX_PADDING)
-            val filmHeight = maxOf(originalHeight, layout.height + 2 * BOX_PADDING)
-                .coerceAtMost(if (maxHeight == Float.MAX_VALUE) Float.MAX_VALUE else maxHeight)
+            val filmWidth = maxOf(originalWidth, fit.width + 2 * BOX_PADDING)
+            val filmHeight = maxOf(originalHeight, fit.layout.height + 2 * BOX_PADDING)
+                .coerceAtMost(if (ceilingHeight == Float.MAX_VALUE) Float.MAX_VALUE else ceilingHeight)
 
             canvas.drawRect(
                 box.left.toFloat(),
@@ -94,25 +90,31 @@ class TranslationOverlayView(context: Context) : View(context) {
 
             canvas.save()
             canvas.translate(box.left.toFloat() + BOX_PADDING, box.top.toFloat() + BOX_PADDING)
-            layout.draw(canvas)
+            fit.layout.draw(canvas)
             canvas.restore()
         }
     }
 
+    private class Fit(val layout: StaticLayout, val width: Float)
+
     /**
-     * Builds a wrapped [StaticLayout] for [text] at [preferredSize] px within [maxWidth] px.
-     * Only shrinks below [preferredSize] (down to [MIN_TEXT_SIZE]) if [maxHeight] — the space
-     * before the next line — can't hold it; as a last resort at the floor size, truncates
-     * with an ellipsis rather than overlapping the line below.
+     * Finds the largest text size (down to [MIN_TEXT_SIZE]) at which [text] — wrapped at
+     * [targetWidth] — fits within [targetHeight], i.e. the actual space the original text
+     * occupied, rather than assuming a fixed ratio of the box. Only exceeds [targetHeight]
+     * (up to [ceilingHeight], the space before the next line) if even the smallest readable
+     * size still wraps past it; beyond that, truncates with an ellipsis as a last resort.
      */
-    private fun buildMatchedLayout(
+    private fun fitTextToBox(
         text: String,
-        maxWidth: Int,
-        preferredSize: Float,
-        maxHeight: Float
-    ): StaticLayout {
-        fun layoutOf(maxLines: Int?): StaticLayout {
-            val builder = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, maxWidth)
+        targetWidth: Float,
+        targetHeight: Float,
+        ceilingHeight: Float
+    ): Fit {
+        val wrapWidth = targetWidth.toInt().coerceAtLeast(1)
+
+        fun layoutOf(size: Float, maxLines: Int?): StaticLayout {
+            textPaint.textSize = size
+            val builder = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, wrapWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(0f, 1f)
                 .setIncludePad(false)
@@ -123,18 +125,33 @@ class TranslationOverlayView(context: Context) : View(context) {
             return builder.build()
         }
 
-        textPaint.textSize = preferredSize
-        var layout = layoutOf(maxLines = null)
-        while (textPaint.textSize > MIN_TEXT_SIZE && layout.height > maxHeight) {
-            textPaint.textSize = (textPaint.textSize - TEXT_SIZE_STEP).coerceAtLeast(MIN_TEXT_SIZE)
-            layout = layoutOf(maxLines = null)
+        fun widestLine(layout: StaticLayout): Float =
+            (0 until layout.lineCount).maxOf { layout.getLineWidth(it) }
+
+        var size = START_TEXT_SIZE
+        var layout = layoutOf(size, maxLines = null)
+        while (size > MIN_TEXT_SIZE && layout.height > targetHeight) {
+            size = (size - TEXT_SIZE_STEP).coerceAtLeast(MIN_TEXT_SIZE)
+            layout = layoutOf(size, maxLines = null)
         }
 
-        if (layout.height <= maxHeight) return layout
+        // Found a size that fits the original footprint — back off slightly for breathing
+        // room, matching how close the reference app keeps translated text to the source size.
+        if (layout.height <= targetHeight) {
+            size = (size * FIT_SCALE).coerceAtLeast(MIN_TEXT_SIZE)
+            layout = layoutOf(size, maxLines = null)
+            return Fit(layout, widestLine(layout))
+        }
 
+        // Even at the floor size it still wraps past the original height: allow it to use the
+        // extra room up to the next line, and only then fall back to an ellipsis.
+        if (layout.height <= ceilingHeight) {
+            return Fit(layout, widestLine(layout))
+        }
         val lineHeight = textPaint.fontMetrics.let { it.descent - it.ascent }
-        val maxLines = (maxHeight / lineHeight).toInt().coerceAtLeast(1)
-        return layoutOf(maxLines)
+        val maxLines = (ceilingHeight / lineHeight).toInt().coerceAtLeast(1)
+        layout = layoutOf(size, maxLines)
+        return Fit(layout, widestLine(layout))
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
