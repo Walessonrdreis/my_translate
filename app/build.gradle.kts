@@ -1,3 +1,6 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -18,6 +21,18 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+    }
+
+    // Every debug build gets a unique, timestamped filename so successive test builds
+    // never overwrite each other — each one stays around for later comparison/testing.
+    applicationVariants.all {
+        if (buildType.name == "debug") {
+            outputs.all {
+                val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+                val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss").format(Date())
+                output.outputFileName = "app-debug-${versionName}-${timestamp}.apk"
+            }
         }
     }
 
