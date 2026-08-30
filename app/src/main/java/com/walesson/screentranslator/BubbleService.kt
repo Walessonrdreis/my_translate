@@ -44,6 +44,12 @@ private const val ICON_SIZE_DP = 28
 private const val MAGNIFIER_SIZE_DP = 18
 private const val ORBIT_RADIUS_DP = 22f
 private const val ORBIT_DURATION_MS = 1200L
+private const val CLOSE_TARGET_SIZE_DP = 64
+private const val CLOSE_TARGET_ICON_DP = 28
+private const val CLOSE_TARGET_MARGIN_BOTTOM_DP = 48
+/** How close the bubble's center must get to the close target's center to arm it, in dp. */
+private const val CLOSE_TARGET_SNAP_RADIUS_DP = 60f
+private const val CLOSE_TARGET_ARMED_SCALE = 1.2f
 
 class BubbleService : Service() {
 
@@ -60,6 +66,9 @@ class BubbleService : Service() {
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var isDragging = false
+
+    private var closeTargetView: View? = null
+    private var closeTargetArmed = false
 
     private val scope = CoroutineScope(Dispatchers.Main)
     private var captureManager: ScreenCaptureManager? = null
@@ -78,6 +87,7 @@ class BubbleService : Service() {
             return
         }
         addBubble()
+        addCloseTarget()
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         recognizerClient = recognizer
         ocrManager = TextRecognitionManager(recognizer)
@@ -220,21 +230,106 @@ class BubbleService : Service() {
                 val dx = (event.rawX - initialTouchX).toInt()
                 val dy = (event.rawY - initialTouchY).toInt()
                 if (kotlin.math.abs(dx) > 10 || kotlin.math.abs(dy) > 10) {
+                    if (!isDragging) showCloseTarget()
                     isDragging = true
                 }
                 params.x = initialX + dx
                 params.y = initialY + dy
                 windowManager.updateViewLayout(view, params)
+                if (isDragging) updateCloseTargetArmedState(params)
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                if (!isDragging) {
+                if (isDragging) {
+                    hideCloseTarget()
+                    if (closeTargetArmed) {
+                        closeBubbleAndOpenApp()
+                        return true
+                    }
+                } else {
                     onBubbleTapped?.invoke()
                 }
                 return true
             }
         }
         return false
+    }
+
+    private fun addCloseTarget() {
+        val density = resources.displayMetrics.density
+        val sizePx = (CLOSE_TARGET_SIZE_DP * density).toInt()
+        val iconPx = (CLOSE_TARGET_ICON_DP * density).toInt()
+        val marginBottomPx = (CLOSE_TARGET_MARGIN_BOTTOM_DP * density).toInt()
+
+        val target = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(sizePx, sizePx)
+            background = androidx.core.content.ContextCompat.getDrawable(this@BubbleService, R.drawable.ic_close_target)
+            visibility = View.GONE
+        }
+        val closeIcon = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER)
+            setImageResource(R.drawable.ic_close)
+        }
+        target.addView(closeIcon)
+
+        val params = WindowManager.LayoutParams(
+            sizePx,
+            sizePx,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = marginBottomPx
+        }
+        windowManager.addView(target, params)
+        closeTargetView = target
+    }
+
+    private fun showCloseTarget() {
+        closeTargetArmed = false
+        closeTargetView?.apply {
+            visibility = View.VISIBLE
+            scaleX = 1f
+            scaleY = 1f
+        }
+    }
+
+    private fun hideCloseTarget() {
+        closeTargetView?.visibility = View.GONE
+    }
+
+    /** Checks whether the bubble's center is close enough to the close target to arm it. */
+    private fun updateCloseTargetArmedState(bubbleParams: WindowManager.LayoutParams) {
+        val target = closeTargetView ?: return
+        val density = resources.displayMetrics.density
+        val bubbleSizePx = (BUBBLE_SIZE_DP * density)
+        val (screenWidth, screenHeight) = displaySize()
+
+        val bubbleCenterX = bubbleParams.x + bubbleSizePx / 2f
+        val bubbleCenterY = bubbleParams.y + bubbleSizePx / 2f
+        val targetCenterX = screenWidth / 2f
+        val targetCenterY = screenHeight - (CLOSE_TARGET_MARGIN_BOTTOM_DP * density) - (CLOSE_TARGET_SIZE_DP * density) / 2f
+
+        val dx = bubbleCenterX - targetCenterX
+        val dy = bubbleCenterY - targetCenterY
+        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+        val snapRadiusPx = CLOSE_TARGET_SNAP_RADIUS_DP * density
+
+        val shouldArm = distance <= snapRadiusPx
+        if (shouldArm != closeTargetArmed) {
+            closeTargetArmed = shouldArm
+            val scale = if (shouldArm) CLOSE_TARGET_ARMED_SCALE else 1f
+            target.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
+        }
+    }
+
+    private fun closeBubbleAndOpenApp() {
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        startActivity(openAppIntent)
+        stopSelf()
     }
 
     fun setLoading(isLoading: Boolean) {
@@ -327,6 +422,8 @@ class BubbleService : Service() {
         translatorClient = null
         bubbleView?.let { windowManager.removeView(it) }
         bubbleView = null
+        closeTargetView?.let { windowManager.removeView(it) }
+        closeTargetView = null
     }
 
     companion object {
