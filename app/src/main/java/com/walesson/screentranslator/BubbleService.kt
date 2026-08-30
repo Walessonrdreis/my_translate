@@ -113,6 +113,12 @@ class BubbleService : Service() {
         translatorClient = translator
         translationManager = TranslationManager(translator)
         onBubbleTapped = { onBubbleTap() }
+        // If continuous mode was saved but the accessibility permission got revoked since
+        // (or was never actually granted), fall back to manual rather than silently pretend
+        // continuous mode is on.
+        if (TranslationMode.load(this) == TranslationMode.CONTINUOUS && !isAccessibilityServiceEnabled()) {
+            TranslationMode.save(this, TranslationMode.MANUAL)
+        }
         applyContinuousModeState(TranslationMode.load(this))
     }
 
@@ -385,8 +391,7 @@ class BubbleService : Service() {
         val topY = (params.y - buttonSizePx - gapPx).coerceAtLeast(0)
         val bottomY = params.y + bubbleSizePx + gapPx
 
-        val modeIsOn = TranslationMode.load(this) == TranslationMode.CONTINUOUS
-        val modeBackgroundRes = if (modeIsOn) R.drawable.ic_mode_on else R.drawable.ic_mode_off
+        val modeBackgroundRes = if (isContinuousModeActive()) R.drawable.ic_mode_on else R.drawable.ic_mode_off
         topMenuButton = addMenuButton(R.drawable.ic_autorenew, modeBackgroundRes, buttonSizePx, buttonX, topY) { toggleMode() }
         bottomMenuButton = addMenuButton(R.drawable.ic_settings, R.drawable.ic_close_target, buttonSizePx, buttonX, bottomY) { openSettings() }
     }
@@ -476,6 +481,10 @@ class BubbleService : Service() {
             null
         }
     }
+
+    /** True only when continuous mode is saved AND the accessibility service is actually on. */
+    private fun isContinuousModeActive(): Boolean =
+        TranslationMode.load(this) == TranslationMode.CONTINUOUS && isAccessibilityServiceEnabled()
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         val expected = ComponentName(this, ScrollDetectorService::class.java).flattenToString()
