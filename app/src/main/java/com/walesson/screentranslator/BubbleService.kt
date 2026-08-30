@@ -1,5 +1,6 @@
 package com.walesson.screentranslator
 
+import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -16,6 +17,8 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.LinearInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.app.NotificationCompat
 import com.google.mlkit.nl.translate.Translator
@@ -36,11 +39,18 @@ import kotlinx.coroutines.withContext
 
 private const val CHANNEL_ID = "screen_translator_channel"
 private const val NOTIFICATION_ID = 1
+private const val BUBBLE_SIZE_DP = 56
+private const val ICON_SIZE_DP = 28
+private const val MAGNIFIER_SIZE_DP = 18
+private const val ORBIT_RADIUS_DP = 22f
+private const val ORBIT_DURATION_MS = 1200L
 
 class BubbleService : Service() {
 
     private lateinit var windowManager: WindowManager
-    private var bubbleView: ImageView? = null
+    private var bubbleView: View? = null
+    private var magnifierIcon: ImageView? = null
+    private var orbitAnimator: ValueAnimator? = null
     private var layoutParams: WindowManager.LayoutParams? = null
 
     var onBubbleTapped: (() -> Unit)? = null
@@ -137,12 +147,62 @@ class BubbleService : Service() {
         }
         layoutParams = params
 
-        val view = ImageView(this).apply {
-            setImageResource(R.drawable.ic_bubble)
-            setOnTouchListener(::handleTouch)
+        val density = resources.displayMetrics.density
+        val bubbleSizePx = (BUBBLE_SIZE_DP * density).toInt()
+        val iconSizePx = (ICON_SIZE_DP * density).toInt()
+        val magnifierSizePx = (MAGNIFIER_SIZE_DP * density).toInt()
+
+        val container = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(bubbleSizePx, bubbleSizePx)
+            background = androidx.core.content.ContextCompat.getDrawable(this@BubbleService, R.drawable.ic_bubble)
         }
-        bubbleView = view
-        windowManager.addView(view, params)
+
+        val translateIcon = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(iconSizePx, iconSizePx, Gravity.CENTER)
+            setImageResource(R.drawable.ic_translate)
+        }
+        container.addView(translateIcon)
+
+        val magnifier = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(magnifierSizePx, magnifierSizePx, Gravity.CENTER)
+            setImageResource(R.drawable.ic_search)
+            visibility = View.GONE
+        }
+        container.addView(magnifier)
+        magnifierIcon = magnifier
+
+        container.setOnTouchListener(::handleTouch)
+        bubbleView = container
+        windowManager.addView(container, params)
+    }
+
+    /** Orbits [magnifierIcon] around the bubble's center to signal an in-progress translation. */
+    private fun startOrbitAnimation() {
+        val magnifier = magnifierIcon ?: return
+        magnifier.visibility = View.VISIBLE
+        val radiusPx = ORBIT_RADIUS_DP * resources.displayMetrics.density
+        orbitAnimator?.cancel()
+        orbitAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = ORBIT_DURATION_MS
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener { animator ->
+                val angleRad = Math.toRadians((animator.animatedValue as Float).toDouble())
+                magnifier.translationX = (radiusPx * kotlin.math.cos(angleRad)).toFloat()
+                magnifier.translationY = (radiusPx * kotlin.math.sin(angleRad)).toFloat()
+            }
+            start()
+        }
+    }
+
+    private fun stopOrbitAnimation() {
+        orbitAnimator?.cancel()
+        orbitAnimator = null
+        magnifierIcon?.let {
+            it.visibility = View.GONE
+            it.translationX = 0f
+            it.translationY = 0f
+        }
     }
 
     private fun handleTouch(view: View, event: MotionEvent): Boolean {
@@ -178,7 +238,7 @@ class BubbleService : Service() {
     }
 
     fun setLoading(isLoading: Boolean) {
-        bubbleView?.alpha = if (isLoading) 0.5f else 1.0f
+        if (isLoading) startOrbitAnimation() else stopOrbitAnimation()
     }
 
     private fun onBubbleTap() {
@@ -257,6 +317,7 @@ class BubbleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         removeOverlay()
+        orbitAnimator?.cancel()
         scope.cancel()
         captureManager?.stop()
         captureManager = null
