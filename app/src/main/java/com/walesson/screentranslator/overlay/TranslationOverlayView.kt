@@ -16,6 +16,8 @@ private const val MIN_TEXT_SIZE = 8f
 private const val DEFAULT_TEXT_SIZE = 36f
 private const val TEXT_SIZE_STEP = 1f
 private const val BOX_PADDING = 4f
+/** Final text size is this fraction of the size that exactly fits, for visual breathing room. */
+private const val FIT_SCALE = 0.8f
 
 fun isOutsideAllBlocks(x: Float, y: Float, blocks: List<TextBlock>): Boolean {
     // Manual containment check: does not rely on Rect.contains(), which is a stubbed
@@ -94,7 +96,12 @@ class TranslationOverlayView(context: Context) : View(context) {
             layout = layoutOf(maxLines = null)
         }
 
-        if (layout.height <= maxHeight) return layout
+        // Once it fits exactly, back off to FIT_SCALE of that size so the text has visual
+        // breathing room instead of touching the film's edges.
+        if (layout.height <= maxHeight) {
+            textPaint.textSize = (textPaint.textSize * FIT_SCALE).coerceAtLeast(MIN_TEXT_SIZE)
+            return layoutOf(maxLines = null)
+        }
 
         val lineHeight = textPaint.fontMetrics.let { it.descent - it.ascent }
         val maxLines = (maxHeight / lineHeight).toInt().coerceAtLeast(1)
