@@ -135,21 +135,31 @@ class TranslationOverlayView(context: Context) : View(context) {
             layout = layoutOf(size, maxLines = null)
         }
 
-        // Bump the fitted size up a couple of points — the exact fit reads slightly small
-        // next to the original, this keeps it closer to the reference app's look.
-        size += TEXT_SIZE_BOOST
-        layout = layoutOf(size, maxLines = null)
-
-        if (layout.height <= ceilingHeight) {
-            return Fit(layout, widestLine(layout))
+        // Bump the fitted size up for readability (closer to the reference app's look), but
+        // only as far as the space before the next line actually allows — a long sentence
+        // that fits at the exact size shouldn't get truncated just because the boost pushed
+        // it past the ceiling.
+        var boostedSize = size
+        var boostedLayout = layout
+        val maxBoostedSize = size + TEXT_SIZE_BOOST
+        while (boostedSize < maxBoostedSize) {
+            val candidateSize = (boostedSize + TEXT_SIZE_STEP).coerceAtMost(maxBoostedSize)
+            val candidateLayout = layoutOf(candidateSize, maxLines = null)
+            if (candidateLayout.height > ceilingHeight) break
+            boostedSize = candidateSize
+            boostedLayout = candidateLayout
         }
 
-        // Even boosted, it still wraps past the space before the next line: truncate instead
-        // of overlapping it.
+        if (boostedLayout.height <= ceilingHeight) {
+            return Fit(boostedLayout, widestLine(boostedLayout))
+        }
+
+        // Even the un-boosted fit doesn't clear the space before the next line: truncate as a
+        // last resort rather than overlapping it.
         val lineHeight = textPaint.fontMetrics.let { it.descent - it.ascent }
         val maxLines = (ceilingHeight / lineHeight).toInt().coerceAtLeast(1)
-        layout = layoutOf(size, maxLines)
-        return Fit(layout, widestLine(layout))
+        val finalLayout = layoutOf(boostedSize, maxLines)
+        return Fit(finalLayout, widestLine(finalLayout))
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
