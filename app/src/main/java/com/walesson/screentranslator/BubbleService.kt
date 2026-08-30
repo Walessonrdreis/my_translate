@@ -505,16 +505,19 @@ class BubbleService : Service() {
         val capture = captureManager ?: return
         isTranslating = true
         setLoading(true)
-        // Remove any translation still on screen *before* capturing — MediaProjection
-        // captures our own overlay window too, so leaving it up would feed the previous
-        // translation back into OCR as if it were new source text.
+        // Remove any translation still on screen, and hide the bubble itself, *before*
+        // capturing — MediaProjection captures every one of our own overlay windows too,
+        // so leaving them up would feed stale translated text (or the bubble's own icon)
+        // back into OCR as if it were new source content.
         removeOverlay()
+        bubbleView?.visibility = View.INVISIBLE
         scope.launch {
             try {
-                // Give the compositor a frame to actually redraw without the overlay before
+                // Give the compositor a frame to actually redraw without our overlays before
                 // the screenshot is taken.
                 delay(OVERLAY_REMOVAL_SETTLE_MS)
                 val bitmap = withContext(Dispatchers.Default) { capture.captureFrame() }
+                bubbleView?.visibility = View.VISIBLE
                 if (bitmap == null) {
                     Log.w(TAG, "No frame captured; aborting translation.")
                     return@launch
@@ -539,6 +542,7 @@ class BubbleService : Service() {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "Translation pipeline failed.", e)
             } finally {
+                bubbleView?.visibility = View.VISIBLE
                 setLoading(false)
                 isTranslating = false
             }
