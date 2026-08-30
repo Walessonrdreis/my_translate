@@ -4,6 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -13,6 +16,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import android.widget.Button
 import android.widget.TextView
+
+private const val PREFS_NAME = "screen_translator_prefs"
+private const val KEY_SHORTCUT_REQUESTED = "shortcut_requested"
+private const val SHORTCUT_ID = "main_shortcut"
 
 class MainActivity : AppCompatActivity() {
 
@@ -62,6 +69,34 @@ class MainActivity : AppCompatActivity() {
                 requestOverlayPermission()
             }
         }
+
+        maybeRequestPinnedShortcut()
+    }
+
+    /**
+     * Asks the system, once per install, to pin a home-screen shortcut for the app. Android
+     * requires an explicit user confirmation dialog for this (silent home-screen icon
+     * placement is blocked since API 26) — this just triggers that one-time prompt.
+     */
+    private fun maybeRequestPinnedShortcut() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_SHORTCUT_REQUESTED, false)) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+        val shortcutManager = getSystemService(ShortcutManager::class.java)
+        if (shortcutManager?.isRequestPinShortcutSupported != true) return
+
+        val shortcutIntent = Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_MAIN
+        }
+        val shortcut = ShortcutInfo.Builder(this, SHORTCUT_ID)
+            .setShortLabel(getString(R.string.app_name))
+            .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+            .setIntent(shortcutIntent)
+            .build()
+
+        shortcutManager.requestPinShortcut(shortcut, null)
+        prefs.edit().putBoolean(KEY_SHORTCUT_REQUESTED, true).apply()
     }
 
     private fun startWithNotificationPermission() {
