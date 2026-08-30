@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
 import android.view.MotionEvent
 import android.view.View
 import com.walesson.screentranslator.ocr.TextBlock
@@ -34,7 +37,7 @@ class TranslationOverlayView(context: Context) : View(context) {
         style = Paint.Style.FILL
     }
 
-    private val textPaint = Paint().apply {
+    private val textPaint = TextPaint().apply {
         color = Color.WHITE
         isAntiAlias = true
     }
@@ -51,18 +54,34 @@ class TranslationOverlayView(context: Context) : View(context) {
             val boxHeight = (box.bottom - box.top).toFloat()
             textPaint.textSize = (boxHeight * FONT_HEIGHT_RATIO).coerceAtLeast(MIN_TEXT_SIZE)
 
-            // Single line, same height as the original — only the width is allowed to grow
-            // rightward to fit longer translated text, never the height.
-            val textWidth = textPaint.measureText(block.text)
-            val filmLeft = box.left.toFloat()
-            val filmRight = maxOf(box.right.toFloat(), filmLeft + textWidth + 2 * BOX_PADDING)
+            // Width stays at the original box width unless a single word is wider than that
+            // — then it widens just enough to fit that word, never enough to cut it mid-way.
+            val originalWidth = (box.right - box.left).toFloat()
+            val longestWordWidth = block.text.split(" ").maxOfOrNull { textPaint.measureText(it) } ?: 0f
+            val filmWidth = maxOf(originalWidth, longestWordWidth + 2 * BOX_PADDING)
+            val wrapWidth = (filmWidth - 2 * BOX_PADDING).toInt().coerceAtLeast(1)
 
-            canvas.drawRect(filmLeft, box.top.toFloat(), filmRight, box.bottom.toFloat(), backgroundPaint)
+            val layout = StaticLayout.Builder.obtain(block.text, 0, block.text.length, textPaint, wrapWidth)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(0f, 1f)
+                .setIncludePad(false)
+                .build()
 
-            val fm = textPaint.fontMetrics
-            val textHeight = fm.descent - fm.ascent
-            val baseline = box.top.toFloat() + (boxHeight - textHeight) / 2f - fm.ascent
-            canvas.drawText(block.text, filmLeft + BOX_PADDING, baseline, textPaint)
+            // Height grows downward to fit every wrapped line — it's never capped or shrunk.
+            val filmHeight = maxOf(boxHeight, layout.height + 2 * BOX_PADDING)
+
+            canvas.drawRect(
+                box.left.toFloat(),
+                box.top.toFloat(),
+                box.left + filmWidth,
+                box.top + filmHeight,
+                backgroundPaint
+            )
+
+            canvas.save()
+            canvas.translate(box.left.toFloat() + BOX_PADDING, box.top.toFloat() + BOX_PADDING)
+            layout.draw(canvas)
+            canvas.restore()
         }
     }
 
