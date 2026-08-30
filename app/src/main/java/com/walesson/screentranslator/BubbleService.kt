@@ -37,6 +37,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -57,6 +58,8 @@ private const val LONG_PRESS_MS = 500L
 private const val MENU_BUTTON_SIZE_DP = 48
 private const val MENU_BUTTON_ICON_DP = 24
 private const val MENU_GAP_DP = 16
+/** Frame settle time after removing the overlay, before capturing, so it isn't re-captured. */
+private const val OVERLAY_REMOVAL_SETTLE_MS = 150L
 
 class BubbleService : Service() {
 
@@ -91,6 +94,7 @@ class BubbleService : Service() {
     private var recognizerClient: TextRecognizer? = null
     private var translatorClient: Translator? = null
     private var overlayView: TranslationOverlayView? = null
+    private var isTranslating = false
 
     override fun onCreate() {
         super.onCreate()
@@ -470,14 +474,26 @@ class BubbleService : Service() {
     }
 
     private fun onBubbleTap() {
+        if (isTranslating) {
+            Log.d(TAG, "Translation already in progress; ignoring this trigger.")
+            return
+        }
         val capture = captureManager ?: return
+        isTranslating = true
         setLoading(true)
+        // Remove any translation still on screen *before* capturing — MediaProjection
+        // captures our own overlay window too, so leaving it up would feed the previous
+        // translation back into OCR as if it were new source text.
+        removeOverlay()
         scope.launch {
             try {
+                // Give the compositor a frame to actually redraw without the overlay before
+                // the screenshot is taken.
+                delay(OVERLAY_REMOVAL_SETTLE_MS)
                 val bitmap = withContext(Dispatchers.Default) { capture.captureFrame() }
                 if (bitmap == null) {
                     Log.w(TAG, "No frame captured; aborting translation.")
-                    setLoading(false); return@launch
+                    return@launch
                 }
                 val blocks = try {
                     ocrManager.recognize(bitmap)
@@ -486,20 +502,21 @@ class BubbleService : Service() {
                 }
                 if (blocks.isEmpty()) {
                     Log.w(TAG, "OCR returned zero text blocks.")
-                    setLoading(false); return@launch
+                    return@launch
                 }
                 val downloadResult = translationManager.ensureModelDownloaded()
                 if (downloadResult.isFailure) {
                     Log.e(TAG, "Translation model download failed.", downloadResult.exceptionOrNull())
-                    setLoading(false); return@launch
+                    return@launch
                 }
                 val translated = translationManager.translateAll(blocks)
                 showOverlay(translated)
-                setLoading(false)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "Translation pipeline failed.", e)
+            } finally {
                 setLoading(false)
+                isTranslating = false
             }
         }
     }
