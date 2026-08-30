@@ -18,8 +18,8 @@ private const val TEXT_SIZE_STEP = 1f
 private const val BOX_PADDING = 3f
 /** Gap kept between a block's film and the next line below it. */
 private const val LINE_GAP = 2f
-/** Small margin so text doesn't touch the film's edges once it fits. */
-private const val FIT_SCALE = 0.92f
+/** Added to the exactly-fitted size, since the exact fit reads a touch small in practice. */
+private const val TEXT_SIZE_BOOST = 2f
 
 fun isOutsideAllBlocks(x: Float, y: Float, blocks: List<TextBlock>): Boolean {
     // Manual containment check: does not rely on Rect.contains(), which is a stubbed
@@ -135,19 +135,17 @@ class TranslationOverlayView(context: Context) : View(context) {
             layout = layoutOf(size, maxLines = null)
         }
 
-        // Found a size that fits the original footprint — back off slightly for breathing
-        // room, matching how close the reference app keeps translated text to the source size.
-        if (layout.height <= targetHeight) {
-            size = (size * FIT_SCALE).coerceAtLeast(MIN_TEXT_SIZE)
-            layout = layoutOf(size, maxLines = null)
-            return Fit(layout, widestLine(layout))
-        }
+        // Bump the fitted size up a couple of points — the exact fit reads slightly small
+        // next to the original, this keeps it closer to the reference app's look.
+        size += TEXT_SIZE_BOOST
+        layout = layoutOf(size, maxLines = null)
 
-        // Even at the floor size it still wraps past the original height: allow it to use the
-        // extra room up to the next line, and only then fall back to an ellipsis.
         if (layout.height <= ceilingHeight) {
             return Fit(layout, widestLine(layout))
         }
+
+        // Even boosted, it still wraps past the space before the next line: truncate instead
+        // of overlapping it.
         val lineHeight = textPaint.fontMetrics.let { it.descent - it.ascent }
         val maxLines = (ceilingHeight / lineHeight).toInt().coerceAtLeast(1)
         layout = layoutOf(size, maxLines)
